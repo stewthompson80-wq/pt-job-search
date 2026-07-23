@@ -1,0 +1,71 @@
+name: Handle dismiss requests
+
+# Triggered when someone clicks "Not interested" on the results page,
+# which opens a pre-filled GitHub issue titled "dismiss: <job id>" and
+# they click "Submit new issue". This workflow reads that issue, adds
+# the job to data/dismissed_ids.json so it's never shown or emailed
+# again, regenerates the results page, and closes the issue.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  dismiss:
+    if: >
+      startsWith(github.event.issue.title, 'dismiss:') &&
+      github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Record the dismissed job
+        env:
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+        run: |
+          python3 -c "
+          import json, os
+          title = os.environ['ISSUE_TITLE']
+          job_id = title.split('dismiss:', 1)[1].strip()
+          path = 'data/dismissed_ids.json'
+          try:
+              with open(path) as f:
+                  ids = json.load(f)
+          except (FileNotFoundError, json.JSONDecodeError):
+              ids = []
+          if job_id not in ids:
+              ids.append(job_id)
+          with open(path, 'w') as f:
+              json.dump(ids, f, indent=2)
+          print('Dismissed:', job_id)
+          "
+
+      - name: Regenerate the results page
+        working-directory: scripts
+        run: python regenerate_page.py
+
+      - name: Commit changes
+        run: |
+          git config user.name "pt-job-search-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/dismissed_ids.json docs/index.html
+          git diff --staged --quiet || git commit -m "Dismiss listing from issue #${{ github.event.issue.number }}"
+          git push
+
+      - name: Close the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue close "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --comment "Got it -- that listing won't show up again."
