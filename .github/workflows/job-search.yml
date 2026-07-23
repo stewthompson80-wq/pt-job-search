@@ -1,0 +1,45 @@
+name: PT Job Search
+
+on:
+  schedule:
+    # 12:00 UTC = 7:00 AM Central Daylight Time (roughly mid-March to
+    # early-November). During Central Standard Time (winter), this will
+    # fire at 6:00 AM instead, since GitHub cron doesn't auto-adjust for
+    # daylight saving. Shift to '0 13 * * *' in winter if you want it exact.
+    # GitHub may also delay scheduled runs by a few minutes during busy periods.
+    - cron: '0 12 * * *'
+  workflow_dispatch: {}   # lets you click "Run workflow" manually to test
+
+permissions:
+  contents: write
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run job search
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python scripts/job_search.py
+
+      - name: Commit updated results
+        run: |
+          git config user.name "pt-job-search-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/seen_jobs.json docs/index.html
+          git diff --quiet && git diff --staged --quiet || git commit -m "Update job search results"
+          git push
