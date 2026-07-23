@@ -1,0 +1,76 @@
+name: Handle run-now requests
+
+# Triggered when you click "Run search now" on the results page, which
+# opens a pre-filled GitHub issue titled "run: now" and you click
+# "Submit new issue". This workflow runs the same search the daily
+# schedule runs, emails/updates the page as usual, then closes the issue.
+#
+# Restricted to the repo owner so a public webpage visitor can't rack up
+# API charges on your account by opening their own "run: now" issue.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  run-now:
+    if: >
+      startsWith(github.event.issue.title, 'run:') &&
+      github.event.issue.user.login == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run job search
+        working-directory: scripts
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EMAIL_USERNAME: ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: python job_search.py
+
+      - name: Commit updated results
+        run: |
+          git config user.name "pt-job-search-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/seen_jobs.json docs/index.html
+          git diff --quiet && git diff --staged --quiet || git commit -m "On-demand search run"
+          git push
+
+      - name: Close the issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue close "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --comment "Done — fresh results are on the page and in your email if anything new turned up."
+
+  reject-non-owner:
+    if: >
+      startsWith(github.event.issue.title, 'run:') &&
+      github.event.issue.user.login != github.repository_owner
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Close with explanation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue close "${{ github.event.issue.number }}" \
+            --repo "${{ github.repository }}" \
+            --comment "Only the repo owner can trigger a run."
